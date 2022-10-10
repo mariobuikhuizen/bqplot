@@ -21,7 +21,7 @@ import * as popperreference from './PopperReference';
 import popper from 'popper.js';
 import * as THREE from 'three';
 import { Dict, WidgetModel, WidgetView } from '@jupyter-widgets/base';
-import { applyAttrs, applyStyles, getLuminoWidget } from './utils';
+import { applyAttrs, applyStyles } from './utils';
 import { Scale } from './Scale';
 import { ScaleModel } from './ScaleModel';
 import { AxisModel } from './AxisModel';
@@ -70,6 +70,29 @@ export class Figure extends widgets.DOMWidgetView {
     this._initial_marks_created = new Promise((resolve) => {
       this._initial_marks_created_resolve = resolve;
     });
+
+    this.intersectObserver = new IntersectionObserver(
+      (entries: IntersectionObserverEntry[]) => {
+        if (entries[0].isIntersecting) {
+          this.visible = true;
+          this.debouncedRelayout();
+        } else if (entries[0].rootBounds != null) {
+          /* When 'rootBounds' is null, 'isIntersecting' is 'false', but the plot is visible, so only change 'visible'
+           * if rootBonds is set. I can't find any info on this behaviour. */
+          this.visible = false;
+        }
+      },
+      { threshold: 0 }
+    );
+    this.intersectObserver.observe(this.el);
+
+    this.resizeObserver = new ResizeObserver(
+      (entries: ResizeObserverEntry[]) => {
+        this.debouncedRelayout();
+      }
+    );
+
+    this.resizeObserver.observe(this.el);
 
     super.initialize.apply(this, arguments);
   }
@@ -320,13 +343,6 @@ export class Figure extends widgets.DOMWidgetView {
 
     document.body.appendChild(this.tooltip_div.node());
     this.create_listeners();
-
-    // In the classic notebook, we should relayout the figure on
-    // resize of the main window.
-    window.addEventListener('resize', this.debouncedRelayout);
-    this.once('remove', () => {
-      window.removeEventListener('resize', this.debouncedRelayout);
-    });
 
     return Promise.all([mark_views_updated, axis_views_updated]);
   }
@@ -732,29 +748,6 @@ export class Figure extends widgets.DOMWidgetView {
     this.plotarea_height = this.height - this.margin.top - this.margin.bottom;
   }
 
-  processPhosphorMessage(msg) {
-    // @ts-ignore: The following line can only compile with ipywidgets 7
-    this._processLuminoMessage(msg, super.processPhosphorMessage);
-  }
-
-  processLuminoMessage(msg) {
-    this._processLuminoMessage(msg, super.processLuminoMessage);
-  }
-
-  _processLuminoMessage(msg, _super) {
-    _super.call(this, msg);
-
-    switch (msg.type) {
-      case 'resize':
-      case 'after-show':
-      case 'after-attach':
-        if (getLuminoWidget(this).isVisible) {
-          this.debouncedRelayout();
-        }
-        break;
-    }
-  }
-
   relayout() {
     const relayoutImpl = () => {
       this.relayoutRequested = false; // reset relayout request
@@ -1006,6 +999,8 @@ export class Figure extends widgets.DOMWidgetView {
     if (this.tooltip_div !== undefined) {
       this.tooltip_div.remove();
     }
+    this.intersectObserver.disconnect();
+    this.resizeObserver.disconnect();
     return super.remove.apply(this, arguments);
   }
 
@@ -1308,6 +1303,9 @@ export class Figure extends widgets.DOMWidgetView {
   xPaddingArr: { [id: string]: number };
   y_pad_dict: { [id: string]: number };
   yPaddingArr: { [id: string]: number };
+  intersectObserver: IntersectionObserver;
+  resizeObserver: ResizeObserver;
+  visible: boolean;
 
   private dummyNodes: Dict<any> = {};
 
